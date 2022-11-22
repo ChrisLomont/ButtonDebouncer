@@ -1,8 +1,10 @@
 // button support for ESP32 code
 
+#include <cstdint>
+
 #include "driver/gpio.h"
 #include "esp_timer.h" // esp_timer_get_time
-#include "Fast/FastTask.h"
+#include "esp_log.h"
 
 #include "Button.h"
 
@@ -11,6 +13,10 @@ using namespace Lomont::ButtonHelpers;
 
 
 namespace {
+
+// timer task for ESP32
+esp_timer_handle_t periodic_timer;
+
 // timer interrupt for buttons
 void ButtonISR(void*)
 {
@@ -25,23 +31,39 @@ void ButtonISR(void*)
         b->DebounceInput(isDown, elapsedMs); // call debouncer code
     }
 }
+
+} // anonymous namespace
+
+namespace Lomont { namespace ButtonHelpers { namespace ButtonHW {
+
+void StartDebouncerInterrupt()
+{
+
+    const esp_timer_create_args_t periodic_timer_args = {
+                .callback = ButtonISR,
+                .arg = nullptr, // no arguments
+                .dispatch_method = ESP_TIMER_TASK, // task or ISR
+                /* name is optional, but may help identify the timer when debugging */
+                .name = "buttonTimer",
+                .skip_unhandled_events = true
+        };
+
+    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
+    /* The timer has been created but is not running yet */	
+
+    /* Start the timer */
+    // timer in microseconds
+    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, ButtonTimings::debouncerInterruptMs*1000));
 }
 
-void ButtonHW::StartButtonISR()
+void StopDebouncerInterrupt()
 {
-    FastTask::StartTimerTask(
-        ButtonISR,
-        ButtonTimings::debouncerInterruptMs*1000, // ms to us
-        nullptr);
-}
-
-void ButtonHW::StopButtonISR()
-{
-    FastTask::EndTimerTask();
+    ESP_ERROR_CHECK(esp_timer_stop(periodic_timer));
+    ESP_ERROR_CHECK(esp_timer_delete(periodic_timer));	
 }
 
 // set pin
-void ButtonHW::SetPinHardware(int gpioPinNumber, bool downIsHigh)
+void SetPinHardware(int gpioPinNumber, bool downIsHigh)
 {
 	// zero-initialize the config structure.
     gpio_config_t io_conf = {};
@@ -74,8 +96,10 @@ void ButtonHW::SetPinHardware(int gpioPinNumber, bool downIsHigh)
     }
 
 // get elapsed time from the button system
-uint64_t ButtonHW::ElapsedMs()
+uint64_t ElapsedMs()
 {
     auto t =  esp_timer_get_time(); // get 64 bit signed time in us
     return t/1000;// into milliseconds
 }
+
+}}} // nested namespaces

@@ -38,6 +38,7 @@ namespace Lomont {
         namespace ButtonHW
         {
             // get elapsed time from the button system
+            // ensure no possibility of getting data in wrong order or data tearing!
             uint64_t ElapsedMs();
 
             // Start/Stop the button interrupt
@@ -46,18 +47,20 @@ namespace Lomont {
             // 2 - for each button in system (via buttonPtrs),
             //     1 - read pin, process whether pins high or low means button down
             //     2 - call base class Debouncer DebounceInput with isDown and elapsedMs
-            void StartButtonISR();
-            void StopButtonISR();
+            void StartDebouncerInterrupt();
+            void StopDebouncerInterrupt();
 
+            // prepare hardware as needed for a new pin to watch
             void SetPinHardware(int gpioPinNumber, bool downIsHigh);
         };
+
 
 
 
         // all FSM stuff
         namespace FSM
         {
-            // An action to perform        
+            // An action to perform on an arrow match       
             struct Action
             {
                 // values p,q to use
@@ -69,19 +72,16 @@ namespace Lomont {
                 // 2 = sub p from counter q
                 // 3 = copy counter p to counter q
                 // 4 = set counter q to value in p
-                // 5 = add p to time offset, useful for repeat clicks
-                // 6 = reset time offset to p
                 int action{ 0 };
 
                 // apply action to counters and timer offset
-                void DoAction(std::vector<int>& counters, int& timeOffset) const
+                void DoAction(std::vector<int>& counters) const
                 {
                     if (action == 1) counters[q] += p;
                     else if (action == 2) counters[q] -= p;
                     else if (action == 3) counters[q] = counters[p];
                     else if (action == 4) counters[q] = p;
-                    else if (action == 5) timeOffset += p;
-                    else if (action == 6) timeOffset = p;
+                    else { printf("ERROR - invalid button action"); }
                 }
 
             };
@@ -100,17 +100,8 @@ namespace Lomont {
                 return Action{ src,dst,3 };
 
             }
-            inline Action IncrementTimeOffset(int offset)
-            {
-                return Action{ offset,0,5 };
-            }
-            inline Action SetTimeOffset(int offset)
-            {
-                return Action{ offset,0,6 };
-            }
 
-
-
+            // hold a state transition and pattern to match
             struct Arrow
             {
                 Arrow(int dst, int buttonId, int action, int tm, int t0)
@@ -177,7 +168,7 @@ namespace Lomont {
                 // 0 for ignore
                 // 1 for buttonTimeInState <= timeBound
                 // 2 for buttonTimeInState >= timeBound
-                // 3 for timeInState > timeBound
+                // 3 for timeInState >= timeBound
                 int timeAction{ 0 };
 
                 // time for comparisons
@@ -200,23 +191,20 @@ namespace Lomont {
                     }
                     if (timeAction != 0)
                     {
-                        if (timeAction == 1 && static_cast<int>(timeInButtonState) >= timeBoundMs)
+                        if (timeAction == 1 && static_cast<int>(timeInButtonState) > timeBoundMs)
                             return false;
-                        if (timeAction == 2 && static_cast<int>(timeInButtonState) <= timeBoundMs)
+                        if (timeAction == 2 && static_cast<int>(timeInButtonState) < timeBoundMs)
                             return false;
-                        if (timeAction == 3 && static_cast<int>(stateTimeMs) <= timeBoundMs)
+                        if (timeAction == 3 && static_cast<int>(stateTimeMs) < timeBoundMs)
                             return false;
                     }
                     return true;
                 }
-
-
             };
 
             // a state is a list of exiting arrows
-            class State
+            struct State
             {
-            public:
                 std::vector<Arrow> arrows_;
                 State(std::initializer_list<Arrow> arrows)
                 {
@@ -227,10 +215,9 @@ namespace Lomont {
             };
 
 
-            class FSMDef
+            // defines a finite state machine
+            struct FSMDef
             {
-            public:
-
                 FSMDef(int counters) : counters_(counters) {}
 
                 int counters_; // number of counters needed
@@ -267,10 +254,22 @@ namespace Lomont {
                 }
             };
 
+            // holds a finite state machine
             class ButtonFSM
             {
 
             public:
+
+                ButtonFSM(const FSMDef* fsm)
+                {
+                    fsm_ = fsm;
+                    const auto c = fsm->counters_;
+                    counters_.resize(c);
+                    // zero values
+                    for (auto i = 0; i < c; ++i)
+                        counters_[i] = 0;
+                }
+
                 // read counter j, set to 0
                 int Read0(int j = 0)
                 {
@@ -284,7 +283,6 @@ namespace Lomont {
                 void Update(int buttonId, bool buttonDown, uint64_t timeInStateMs)
                 {
                     if (!fsm_) return; // null, no items
-                    timeInStateMs -= timeOffset_;
                     //printf("Check state %d %d %d\n",buttonId,buttonDown,(int)timeInStateMs);
                     const auto& state = fsm_->states_[stateIndex_];
                     const auto stateDt = ButtonHW::ElapsedMs() - stateTimeChangedMs_;
@@ -295,7 +293,7 @@ namespace Lomont {
                         {
                             for (auto& action : arrow.actions_)
                             {
-                                action.DoAction(counters_, timeOffset_);
+                                action.DoAction(counters_);
                             }
 
                             // useful debugging statement
@@ -324,19 +322,6 @@ namespace Lomont {
                 }
 
 
-                void SetFSM(const FSMDef* fsm)
-                {
-                    fsm_ = fsm;
-                    if (fsm)
-                    {
-                        const auto c = fsm->counters_;
-                        counters_.resize(c);
-                        // zero values
-                        for (auto i = 0; i < c; ++i)
-                            counters_[i] = 0;
-                    }
-                }
-
                 // set to true to get printf of state changes
                 // useful for debugging 
                 bool dumpStateChangesToConsole{ false };
@@ -347,11 +332,8 @@ namespace Lomont {
                 const FSMDef* fsm_{ nullptr };
                 // counters used in FSM
                 std::vector<int> counters_;
-
+                // last time state changed
                 uint64_t stateTimeChangedMs_{ 0 };
-
-                // used to offset time length, nice for repeat clicks
-                int timeOffset_{ 0 };
             };
 
 	        
@@ -379,13 +361,13 @@ namespace Lomont {
             {
                 integrator_ = static_cast<int8_t>(integrator_ + debouncerInterruptMs);
                 if (integrator_ >= debounceMs && buttonDown != localDown)
-                    ChangeState(buttonDown, elapsedMs);
+                    SetStateAtomically(buttonDown, elapsedMs);
             }
             else if (!buttonDown && integrator_ - debouncerInterruptMs >= 0)
             {
                 integrator_ = static_cast<int8_t>(integrator_ - debouncerInterruptMs);
                 if (integrator_ <= 0 && buttonDown != localDown)
-                    ChangeState(buttonDown, elapsedMs);
+                    SetStateAtomically(buttonDown, elapsedMs);
             }
         }
 
@@ -394,10 +376,13 @@ namespace Lomont {
         // optionally gets time this state was changed
         bool IsDown(uint64_t* stateChangeTimeMs = nullptr) const
         {
-            const uint64_t t = viewableState_; // read once atomically
+
+            bool isDown;
+            uint64_t time;
+            GetStateAtomically(&isDown,&time);
             if (stateChangeTimeMs)
-                *stateChangeTimeMs = t >> 1;
-            return (t & 1) == 1;
+                *stateChangeTimeMs = time;
+            return isDown;
         }
     private:
         // 0          = button up
@@ -405,16 +390,43 @@ namespace Lomont {
         // tallies milliseconds in a state
         int8_t integrator_{ 0 };
 
-        // change visible state to the given one
-        void ChangeState(bool buttonDown, uint64_t elapsedMs)
+        /**************************Atomic read/write of state ***********************************/
+        // many systems won't have atomic 64 bit, or structs. ESP32 Xtensa is one
+        // Others pay a heavy price for larger than native int atomics
+        // Assume the current one has atomic 32 bit read/write/exchanges
+        // TODO - test this higher in code, warn/error out if not
+        // so idea: atomically swap pointers to struct
+
+        // we write only so fast (1 per ms, or so), so this *should* not be an issue
+        // todo - really check this!
+
+        // internal state
+        struct State
         {
-            viewableState_ = (elapsedMs << 1) | (buttonDown ? 1 : 0); // set atomically
+            uint64_t elapsedMs{0};
+            bool isDown{false};
+        };
+
+        State s1, s2; // two states
+        std::atomic<State*> readStatePtr_{&s1};
+
+        // change visible state to the given one
+        // must be atomic in case of concurrent reads of state        
+        void SetStateAtomically(bool buttonDown, uint64_t elapsedMs)
+        {
+            State* writePtr = (readStatePtr_ == &s1) ? &s2: &s1;
+            writePtr->elapsedMs = elapsedMs;
+            writePtr->isDown = buttonDown;
+
+        	// atomic write, enforce above written first
+        	readStatePtr_.store(writePtr, std::memory_order_release);
         }
-
-
-        // low bit: 1 = button down, 0 = button up
-        // next 63 bits, elapsed in ms ()
-        std::atomic<uint64_t> viewableState_{ 0 };
+        void GetStateAtomically(bool * buttonDown, uint64_t * elapsedMs) const
+        {
+	        const State * readPtr = readStatePtr_; // atomic read
+            *buttonDown = readPtr->isDown;
+            *elapsedMs = readPtr->elapsedMs;
+        }
     }; // Debouncer 
 
 }

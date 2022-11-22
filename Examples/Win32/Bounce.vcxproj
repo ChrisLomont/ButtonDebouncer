@@ -135,6 +135,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\Button.cpp" />
+    <ClCompile Include="..\example.cpp" />
     <ClCompile Include="ButtonWin32.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>

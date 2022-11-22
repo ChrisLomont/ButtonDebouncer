@@ -1,3 +1,28 @@
+/*
+MIT License
+
+Copyright (c) 2022 Chris Lomont
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+
 #pragma once
 #ifndef BUTTON_H
 #define BUTTON_H
@@ -29,19 +54,35 @@ namespace Lomont {
      *
      */
 
+    // common interface to access pattern matches
+    class HasPatterns
+    {
+    public:
+        // see if pattern matched
+        // return counter from matches, clear counter
+        int Clicks(unsigned int patternIndex = 0, int counterIndex = 0)
+        {
+            if (patterns.size() <= patternIndex)
+                return 0;
+            return patterns[patternIndex].Read0(counterIndex);
+        }
+        // list of patterns as finite state machines
+        std::vector<ButtonHelpers::FSM::ButtonFSM> patterns;
+    };
+
 
     // represent a button.
     // when pressed, buttons go high, default pulled low
-    class Button final : public Debouncer
+    class Button final : public Debouncer, public HasPatterns
     {
     public:
 
         // create a button on the given gpio, default is pulls high on down
-        // starts button timer interrupts, attaches
+        // starts button timer interrupts, attaches to system
         Button(int gpioNum, bool downIsHigh = true);
 
         // remove button from system, close out 
-        // interrupt on last button gone
+        // interrupt stopped on last button gone
         ~Button();
 
         // NOTE: can check with base Debouncer class 
@@ -59,21 +100,10 @@ namespace Lomont {
         // check if button is down = high or low voltage
         bool DownIsHigh() const { return downIsHigh_; }
 
-        // see if pattern matched
-        // return counter 0 from matches, clear counter
-        int Clicks(unsigned int patternIndex = 0)
-        {
-            if (patternIndex < 0 || patterns.size() <= patternIndex)
-                return 0;
-            return patterns[patternIndex].Read0();
-        }
-
         // unique button id, 1+
         int buttonId;
 
-        // list of patterns as finite state machines
-        // todo - list default ones
-        std::vector<ButtonHelpers::FSM::ButtonFSM> patterns;
+        // todo - list default patterns 
 
         // track all active buttons
         static std::vector<Button*> buttonPtrs;
@@ -84,7 +114,9 @@ namespace Lomont {
         bool downIsHigh_{ true }; // button pulls high or pulls low when pressed
     };
 
-    class ButtonMultiPattern
+    using ButtonPtr = std::shared_ptr<Button>;
+
+    class ButtonMultiPattern : public HasPatterns
     {
     public:
         // call often to look for multi button patterns
@@ -103,18 +135,12 @@ namespace Lomont {
                     p.Update(b->buttonId, isDown, stateTime);
             }
         }
+        // todo - make helper for combos like Konami code
+        // Konami: UUDDLRLRBA  on controller:
 
-        // see if pattern matched
-        int Clicks(int patternIndex = 0)
-        {
-            if (patternIndex < 0 || static_cast<int>(patterns.size()) <= patternIndex)
-                return 0;
-            return patterns[patternIndex].Read0();
-        }
 
-        // list of patterns as finite state machines
-        std::vector<ButtonHelpers::FSM::ButtonFSM> patterns;
-
+        // Add pattern for button 1 down, then 2 down, then 1 up, then 2 up
+        // with given min and max times for transitions
         void AddABABPattern(int T0, int T1)
         {
             using namespace ButtonHelpers::FSM;    // make construction easier
@@ -174,17 +200,16 @@ namespace Lomont {
             }
             for (const auto& f : defs)
             {
-                auto& b = patterns.emplace_back();
-                // b.dumpStateChangesToConsole = true;
-                b.SetFSM(&f);
+                patterns.emplace_back(&f);
+                // patterns.back().dumpStateChangesToConsole = true; // set to true to see state transitions on console
             }
-
         }
+
         // need these to live as long as needed
         std::vector<ButtonHelpers::FSM::FSMDef> defs;
     };
 
-    using ButtonPtr = std::shared_ptr<Button>;
+    using ButtonMultiPatternPtr = std::shared_ptr<ButtonMultiPattern>;
 
 }
 

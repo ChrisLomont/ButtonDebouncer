@@ -1,20 +1,21 @@
-#include <thread>
 #include <windows.h>
-
 #include "Button.h"
 
 using namespace std;
-using namespace std::chrono;
 using namespace Lomont;
 
-void Run()
-{
-	auto bz = Button('Z'); // button 1
-	auto bx = Button('X'); // button 2
-	auto by = Button('Y'); // button 3
+// link with example.cpp
+extern void StartButtons(int pin1, bool pin1DownIsHigh, int pin2, bool pin2DownIsHigh);
+extern void StopButtons();
+extern void ProcessButtons();
 
-	auto mp = ButtonMultiPattern();
-	mp.AddTestPatterns(); // default patterns to check
+int main()
+{
+	printf("keys x & z for patterns, q to quit\n");
+
+	// buttons 1 and 2
+	// set pin pull directions to match your hardware!
+	StartButtons('Z', true, 'X', true);
 
 	auto t = ButtonHelpers::ButtonHW::ElapsedMs();
 	bool done = false;
@@ -23,39 +24,19 @@ void Run()
 		// wait till change
 		while (t == ButtonHelpers::ButtonHW::ElapsedMs())
 		{
-			
+
 		}
 		t = ButtonHelpers::ButtonHW::ElapsedMs();
 
-		mp.UpdatePatternMatches();
-		for (auto k = 0U; k < mp.patterns.size(); ++k)
-		{
-			const auto c = mp.Clicks(k);
-			if (c > 0)
-				printf("Multi pattern type %d, count %d\n", k, c);
-		}
+		ProcessButtons();
 
-#if 1
-		for (const auto & b : Button::buttonPtrs)
-		{
-			b->UpdatePatternMatches();
-			for (auto k = 0U; k < b->patterns.size(); ++k)
-			{
-				const auto c = b->Clicks(k);
-				if (c > 0)
-					printf("%c click type %d, count %d\n", b->GpioNum(), k, c);
-			}
-		}
-#endif
-
+		// see if done
 		const SHORT k = GetAsyncKeyState('Q');
 		done = (k & 0x8000) != 0; // high bit down
-
 	}
-}
-int main()
-{
-	Run();
+
+	StopButtons();
+
 	Sleep(500); // hope threads let go
 
 }

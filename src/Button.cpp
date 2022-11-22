@@ -25,11 +25,17 @@ using namespace std;
 using namespace Lomont::ButtonHelpers;
 using namespace Lomont;
 
+// these based on some empirical work
+// median up/down times 150ms, gaussian, std dev 120ms
+// so 1.5 std dev gives range of [60,240]
+// shhorten a little for faster clickers:
+
 // system timing items
-int ButtonTimings::clickUpLowMs = 50; // wait to start looking for down
-int ButtonTimings::clickUpHighMs = 250; // 
-int ButtonTimings::clickDownLowMs = 50; // length for min down click
-int ButtonTimings::clickDownHighMs = 250; // max down click
+int ButtonTimings::clickUpLowMs = 40; // wait to start looking for down
+int ButtonTimings::clickUpHighMs = 210; // 
+int ButtonTimings::clickDownLowMs = 40; // length for min down click
+int ButtonTimings::clickDownHighMs = 210; // max down click
+
 int ButtonTimings::repeatClickDelayMs = 300; // repeat        
 int ButtonTimings::mediumPressMs = 600; // medium hold
 int ButtonTimings::longPressMs = 2500; // long hold
@@ -92,7 +98,7 @@ void AddClickLongerFSM(int minLenMs)
                     IncrementCounter(0)})}), // increment counter
 
         State({
-        	Arrow(0,false,clickUpLowMs*2)})});
+        	Arrow(0,false,0)})});
             
 }
 
@@ -102,23 +108,28 @@ void AddClickRepeatFSM()
     // single counter
     auto & f = defaultFSM.emplace_back(1);
 
-    f.Build({
-        State({
-        	Arrow(1,false,clickUpLowMs)}),
+    // average click time
+    const auto clickDelay =
+        (clickUpLowMs + clickDownLowMs +
+            clickUpHighMs + clickDownHighMs) / 2;
 
-    	State({
-    		Arrow(2,true,repeatClickDelayMs,{
-				IncrementTimeOffset(repeatClickDelayMs), // time offset for repeat clicks
-                IncrementCounter(0)})}), // increment click counter
-                
+    // clickUpLowMs
+    f.Build({
+        // state 0 - ensure up some time
         State({
-        	Arrow(2,true,(clickUpLowMs+clickDownLowMs),{
-				IncrementTimeOffset(clickUpLowMs + clickDownLowMs), // time offset
-                IncrementCounter(0)}), // increment click counter
-        	Arrow(0,false,-(1<<30),{ // todo  longer time?
-                    SetTimeOffset(0)})}) // reset time delta
-    }); 
-                
+            Arrow(1,false,clickUpLowMs)}), 
+
+        // state 1 - held long enough to trigger repeat
+        State({
+            Arrow(2,true,repeatClickDelayMs,{
+                IncrementCounter(0)})}), // increment click counter
+
+		// state 2 - repeat click until button up
+        State({
+            Arrow(2, 0, 2, 3, clickDelay, {
+            IncrementCounter(0)}),
+            Arrow(0,false,0)}) // on up, start over
+    });
 }
 
 void EnsureDefaultFSM()
@@ -139,11 +150,7 @@ void InitFSM(Button * b)
     EnsureDefaultFSM();
 
     for (auto& fsmDef : defaultFSM)
-    {
-        auto & f = b->patterns.emplace_back(); // new space for a pattern
-        f.SetFSM(&fsmDef);
-    }
-    // printf("Button %d has %d patterns\n",b->buttonId,b->patterns.size());
+        b->patterns.emplace_back(&fsmDef); // add pattern
 }
 
 // global next button
@@ -165,11 +172,11 @@ Button::Button(int gpioNum, bool downIsHigh)
     // add button
     // pause task, update internals, restart task
     if (!buttonPtrs.empty())
-        ButtonHW::StopButtonISR();
+        ButtonHW::StopDebouncerInterrupt();
     
     buttonPtrs.push_back(this);
     ButtonHW::SetPinHardware(gpioNum, downIsHigh);
-    ButtonHW::StartButtonISR();
+    ButtonHW::StartDebouncerInterrupt();
 }
 
 Button::~Button()
@@ -178,11 +185,11 @@ Button::~Button()
     if (buttonPtrs.empty()) return;
 
     // pause task, update internals, restart task
-    ButtonHW::StopButtonISR();
+    ButtonHW::StopDebouncerInterrupt();
 
     buttonPtrs.erase(std::remove(buttonPtrs.begin(), buttonPtrs.end(), this), buttonPtrs.end());
     if (!buttonPtrs.empty())
-        ButtonHW::StartButtonISR();
+        ButtonHW::StartDebouncerInterrupt();
 }
 
 // call often to look for button clicks, long presses, etc.

@@ -27,6 +27,9 @@
     <ClCompile Include="..\..\src\Button.cpp">
       <Filter>Button</Filter>
     </ClCompile>
+    <ClCompile Include="..\example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\Button.h">

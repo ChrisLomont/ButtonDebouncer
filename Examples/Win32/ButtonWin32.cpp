@@ -21,9 +21,10 @@ namespace {
         for (const auto& b : Button::buttonPtrs)
         {
 	        const SHORT k = GetAsyncKeyState(b->GpioNum());
-            auto isDown = (k & 0x8000) != 0; // high bit down
-            if (!b->DownIsHigh())
-                isDown = !isDown;
+	        const auto isDown = (k & 0x8000) != 0; // high bit down
+            // ignore pull direction in windows, since keyboard handled it
+            //if (!b->DownIsHigh()) 
+            //    isDown = !isDown;
             b->DebounceInput(isDown, elapsedMs); // call debouncer code
         }
     }
@@ -38,14 +39,14 @@ void ThreadLoop()
 
 }
 
-void ButtonHW::StartButtonISR()
+void ButtonHW::StartDebouncerInterrupt()
 {
     if (th) return; // already running
     stopThread = false;
     th = make_shared<thread>(ThreadLoop);
 }
 
-void ButtonHW::StopButtonISR()
+void ButtonHW::StopDebouncerInterrupt()
 {
     stopThread = true;
     th->join();
