@@ -1,7 +1,4 @@
 // button support for ESP32 code
-#ifndef _MSC_VER // __WIN32__ || _CONSOLE // Win32 types
-
-
 
 #include "driver/gpio.h"
 #include "esp_timer.h" // esp_timer_get_time
@@ -9,11 +6,15 @@
 
 #include "Button.h"
 
+using namespace Lomont;
+using namespace Lomont::ButtonHelpers;
+
+
 namespace {
 // timer interrupt for buttons
 void ButtonISR(void*)
 {
-    uint64_t elapsedMs = Button::ElapsedMs();
+    uint64_t elapsedMs = ButtonHW::ElapsedMs();
     // process each button
     for (auto & b : Button::buttonPtrs)
     {
@@ -26,15 +27,15 @@ void ButtonISR(void*)
 }
 }
 
-void Button::StartButtonISR()
+void ButtonHW::StartButtonISR()
 {
     FastTask::StartTimerTask(
         ButtonISR,
-        Debouncer::debouncerInterruptMs*1000, // ms to us
+        ButtonTimings::debouncerInterruptMs*1000, // ms to us
         nullptr);
 }
 
-void Button::StopButtonISR()
+void ButtonHW::StopButtonISR()
 {
     FastTask::EndTimerTask();
 }
@@ -73,10 +74,8 @@ void ButtonHW::SetPinHardware(int gpioPinNumber, bool downIsHigh)
     }
 
 // get elapsed time from the button system
-uint64_t Button::ElapsedMs()
+uint64_t ButtonHW::ElapsedMs()
 {
     auto t =  esp_timer_get_time(); // get 64 bit signed time in us
     return t/1000;// into milliseconds
 }
-
-#endif

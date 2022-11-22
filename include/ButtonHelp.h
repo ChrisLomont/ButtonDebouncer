@@ -302,7 +302,7 @@ namespace Lomont {
                             if (dumpStateChangesToConsole)
                             {
                                 static int cnt = 1;
-                                printf("State change #%d: button:%d, states %d->%d via arrow %d, time %llu, actions %llu\n",
+                                printf("State change #%d: button:%d, states %d->%d via arrow %d, time %llu, actions %zu\n",
                                     cnt++,
                                     buttonId,
                                     stateIndex_, arrow.destState,
