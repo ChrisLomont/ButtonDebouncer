@@ -419,9 +419,9 @@ namespace Lomont {
                     const uint32_t loCurTime = (uint32_t)(curTime & mask); // low 31 bits
                     const uint32_t stateTime = (state >> 1);
 
-                    // subtract one from top if there was wraparound
-                    // This requires calling within 2^31 ms = ~24 days.
-                    const uint64_t hiCorrectTime = hiCurTime - (stateTime < loCurTime ? bit32 : 0);
+                    // if there was wraparound (cur time < stored time), then subtract one from top 33 bits
+                    // This requires calling every at most 2^31 ms = ~24 days.
+                    const uint64_t hiCorrectTime = hiCurTime - (loCurTime < stateTime ? bit32 : 0);
 
                     buttonDown_ = (state & 1) == 1;
                     changeTimeMs_ = hiCorrectTime | stateTime; // high bits and low bits 
