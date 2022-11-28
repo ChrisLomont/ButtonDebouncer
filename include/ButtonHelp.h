@@ -361,13 +361,13 @@ namespace Lomont {
             {
                 integrator_ = static_cast<int8_t>(integrator_ + debouncerInterruptMs);
                 if (integrator_ >= debounceMs && buttonDown != localDown)
-                    SetStateAtomically(buttonDown, elapsedMs);
+                    state_.SetAtomically(buttonDown, elapsedMs);
             }
             else if (!buttonDown && integrator_ - debouncerInterruptMs >= 0)
             {
                 integrator_ = static_cast<int8_t>(integrator_ - debouncerInterruptMs);
                 if (integrator_ <= 0 && buttonDown != localDown)
-                    SetStateAtomically(buttonDown, elapsedMs);
+                    state_.SetAtomically(buttonDown, elapsedMs);
             }
         }
 
@@ -379,69 +379,92 @@ namespace Lomont {
 
             bool isDown;
             uint64_t time;
-            GetStateAtomically(&isDown,&time);
+            state_.GetAtomically(&isDown,&time);
             if (stateChangeTimeMs)
                 *stateChangeTimeMs = time;
             return isDown;
         }
     private:
+
+        // helper class - replace if needed on your platform
+
+        // hold an atomic update state for the 
+        // bool buttonDown flag and the 
+        // uint64_t time button changed
+        // This version requires
+        // - uint32_t is atomic on platform 
+        // - access to uint64_t ElapsedMs time system has been up
+        // - calling read least once every 24 days to prevent overflows
+        class AtomicState
+        {
+        public:
+            // change visible state to the given one
+            // must be atomic in case of concurrent reads of state        
+            void SetAtomically(bool buttonDown, uint64_t elapsedMs)
+            {
+                atomicState_ = PackState(buttonDown, elapsedMs); // atomic set
+            }
+
+            // get state atomically
+            void GetAtomically(bool* buttonDown, uint64_t* changedTimeMs) const
+            {
+                uint32_t state = atomicState_; // read it
+                if (state != PackState(buttonDown_, changeTimeMs_))
+                { // update internals....
+                    const uint64_t bit32 = (1ULL << 32); // bit 32 set bits mask
+                    const uint64_t mask = bit32 - 1; // low 31 bits mask
+
+                    const uint64_t curTime = ButtonHelpers::ButtonHW::ElapsedMs();      // current time
+                    const uint64_t hiCurTime = curTime & (~mask);          // zero out low 31 bits
+                    const uint32_t loCurTime = (uint32_t)(curTime & mask); // low 31 bits
+                    const uint32_t stateTime = (state >> 1);
+
+                    // subtract one from top if there was wraparound
+                    // This requires calling within 2^31 ms = ~24 days.
+                    const uint64_t hiCorrectTime = hiCurTime - (stateTime < loCurTime ? bit32 : 0);
+
+                    buttonDown_ = (state & 1) == 1;
+                    changeTimeMs_ = hiCorrectTime | stateTime; // high bits and low bits 
+                }
+                *buttonDown = buttonDown_;
+                *changedTimeMs = changeTimeMs_;
+            }
+
+        private:
+            /**************************Atomic read/write of state ***********************************/
+            // many systems won't have atomic 64 bit, or structs. ESP32 Xtensa is one
+            // Others pay a heavy price for larger than native int atomics
+            // Assume the current one has atomic 32 bit read/write/exchanges
+            // TODO - test this higher in code, warn/error out if not
+            // 
+            // idea is: 
+            //  - put up/down bit in low bit, top 31 bits are low part of time
+            //  - fill in rest of time carefully when outer level code requests
+
+            std::atomic<uint32_t> atomicState_;
+
+            uint32_t PackState(bool buttonDown, uint64_t elapsedMs) const
+            {
+                uint32_t val = (uint32_t)elapsedMs; // lower bits
+                val <<= 1;
+                val |= buttonDown ? 1 : 0;
+                return val;
+            }
+
+
+            mutable bool buttonDown_{ false };
+            mutable uint64_t changeTimeMs_{ 0 };
+        };
+
+
         // 0          = button up
         // debounceMs = button down
         // tallies milliseconds in a state
         int8_t integrator_{ 0 };
 
-        /**************************Atomic read/write of state ***********************************/
-        // many systems won't have atomic 64 bit, or structs. ESP32 Xtensa is one
-        // Others pay a heavy price for larger than native int atomics
-        // Assume the current one has atomic 32 bit read/write/exchanges
-        // TODO - test this higher in code, warn/error out if not
-        // 
-        // idea is: 
-        //  - put up/down bit in low bit, top 31 bits are low part of time
-        //  - fill in rest of time carefully when outer level code requests
+        AtomicState state_;
 
-        std::atomic<uint32_t> atomicState_;
 
-        uint32_t PackState(bool buttonDown, uint64_t elapsedMs) const
-        {
-            uint32_t val = (uint32_t)elapsedMs; // lower bits
-            val <<= 1;
-            val |= buttonDown ? 1 : 0;
-            return val;
-        }
-
-        // change visible state to the given one
-        // must be atomic in case of concurrent reads of state        
-        void SetStateAtomically(bool buttonDown, uint64_t elapsedMs)
-        {
-            atomicState_ = PackState(buttonDown, elapsedMs); // atomic set
-        }
-        
-        mutable bool buttonDown_{ false };
-        mutable uint64_t changeTimeMs_{ 0 };
-        void GetStateAtomically(bool * buttonDown, uint64_t * changedTimeMs) const
-        {
-            uint32_t state = atomicState_; // read it
-            if (state != PackState(buttonDown_, changeTimeMs_))
-            { // update internals....
-                const uint64_t bit32 = (1ULL << 32); // bit 32 set bits mask
-                const uint64_t mask = bit32-1; // low 31 bits mask
-
-                const uint64_t curTime     = ButtonHelpers::ButtonHW::ElapsedMs();      // current time
-                const uint64_t hiCurTime   = curTime & (~mask);          // zero out low 31 bits
-                const uint32_t loCurTime   = (uint32_t)(curTime & mask); // low 31 bits
-                const uint32_t stateTime = (state >> 1);
-
-                // subtract one from top if there was wraparound
-                // This requires calling within 2^31 ms = ~24 days.
-                const uint64_t hiCorrectTime = hiCurTime - (stateTime < loCurTime?bit32:0);
-
-                buttonDown_ = (state & 1) == 1;
-                changeTimeMs_ = hiCorrectTime | stateTime; // high bits and low bits 
-            }
-            *buttonDown = buttonDown_;
-            *changedTimeMs = changeTimeMs_;
-        }
     }; // Debouncer 
 
 }
