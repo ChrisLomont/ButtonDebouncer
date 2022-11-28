@@ -395,37 +395,52 @@ namespace Lomont {
         // Others pay a heavy price for larger than native int atomics
         // Assume the current one has atomic 32 bit read/write/exchanges
         // TODO - test this higher in code, warn/error out if not
-        // so idea: atomically swap pointers to struct
+        // 
+        // idea is: 
+        //  - put up/down bit in low bit, top 31 bits are low part of time
+        //  - fill in rest of time carefully when outer level code requests
 
-        // we write only so fast (1 per ms, or so), so this *should* not be an issue
-        // todo - really check this!
+        std::atomic<uint32_t> atomicState_;
 
-        // internal state
-        struct State
+        uint32_t PackState(bool buttonDown, uint64_t elapsedMs) const
         {
-            uint64_t elapsedMs{0};
-            bool isDown{false};
-        };
-
-        State s1, s2; // two states
-        std::atomic<State*> readStatePtr_{&s1};
+            uint32_t val = (uint32_t)elapsedMs; // lower bits
+            val <<= 1;
+            val |= buttonDown ? 1 : 0;
+            return val;
+        }
 
         // change visible state to the given one
         // must be atomic in case of concurrent reads of state        
         void SetStateAtomically(bool buttonDown, uint64_t elapsedMs)
         {
-            State* writePtr = (readStatePtr_ == &s1) ? &s2: &s1;
-            writePtr->elapsedMs = elapsedMs;
-            writePtr->isDown = buttonDown;
-
-        	// atomic write, enforce above written first
-        	readStatePtr_.store(writePtr, std::memory_order_release);
+            atomicState_ = PackState(buttonDown, elapsedMs); // atomic set
         }
-        void GetStateAtomically(bool * buttonDown, uint64_t * elapsedMs) const
+        
+        mutable bool buttonDown_{ false };
+        mutable uint64_t changeTimeMs_{ 0 };
+        void GetStateAtomically(bool * buttonDown, uint64_t * changedTimeMs) const
         {
-	        const State * readPtr = readStatePtr_; // atomic read
-            *buttonDown = readPtr->isDown;
-            *elapsedMs = readPtr->elapsedMs;
+            uint32_t state = atomicState_; // read it
+            if (state != PackState(buttonDown_, changeTimeMs_))
+            { // update internals....
+                const uint64_t bit32 = (1ULL << 32); // bit 32 set bits mask
+                const uint64_t mask = bit32-1; // low 31 bits mask
+
+                const uint64_t curTime     = ButtonHelpers::ButtonHW::ElapsedMs();      // current time
+                const uint64_t hiCurTime   = curTime & (~mask);          // zero out low 31 bits
+                const uint32_t loCurTime   = (uint32_t)(curTime & mask); // low 31 bits
+                const uint32_t stateTime = (state >> 1);
+
+                // subtract one from top if there was wraparound
+                // This requires calling within 2^31 ms = ~24 days.
+                const uint64_t hiCorrectTime = hiCurTime - (stateTime < loCurTime?bit32:0);
+
+                buttonDown_ = (state & 1) == 1;
+                changeTimeMs_ = hiCorrectTime | stateTime; // high bits and low bits 
+            }
+            *buttonDown = buttonDown_;
+            *changedTimeMs = changeTimeMs_;
         }
     }; // Debouncer 
 
